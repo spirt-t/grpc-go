@@ -1581,9 +1581,13 @@ func prepareMsg(m interface{}, codec baseCodec, cp Compressor, comp encoding.Com
 	}
 	// The input interface is not a prepared msg.
 	// Marshal and Compress the data at this point
-	data, err = encode(codec, m)
-	if err != nil {
-		return nil, nil, nil, err
+	var ok bool
+	data, ok = m.([]byte)
+	if !ok {
+		data, err = encode(codec, m)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	compData, err := compress(data, cp, comp)
 	if err != nil {
