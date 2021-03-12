@@ -23,7 +23,6 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -758,17 +757,14 @@ func recv(p *parser, c baseCodec, s *transport.Stream, dc Decompressor, m interf
 	if err != nil {
 		return err
 	}
-	if _, ok := m.([]uint8); ok {
-		err = json.Unmarshal(d, &m)
-		if err != nil {
-			return status.Errorf(codes.Internal, "grpc: failed to unmarshal the received message into interface{}: %v", err)
-		}
+	if _, ok := m.(*[]byte); ok {
+		m = d[2:]
 		if payInfo != nil {
 			payInfo.uncompressedBytes = d
 		}
 		return nil
 	}
-	if err := c.Unmarshal(d, m); err != nil {
+	if err = c.Unmarshal(d, m); err != nil {
 		return status.Errorf(codes.Internal, "grpc: failed to unmarshal the received message %v", err)
 	}
 	if payInfo != nil {
