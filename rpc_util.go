@@ -758,11 +758,10 @@ func recv(p *parser, c baseCodec, s *transport.Stream, dc Decompressor, m interf
 		return err
 	}
 	if _, ok := m.(*io.PipeWriter); ok {
+		defer func() {
+			m.(*io.PipeWriter).Close()
+		}()
 		_, err = m.(*io.PipeWriter).Write(d)
-		if err != nil {
-			return err
-		}
-		err = m.(*io.PipeWriter).Close()
 		return err
 	}
 	if err = c.Unmarshal(d, m); err != nil {
