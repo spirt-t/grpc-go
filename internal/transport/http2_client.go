@@ -387,6 +387,15 @@ func newHTTP2Client(connectCtx, ctx context.Context, addr resolver.Address, opts
 		return nil, err
 	}
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if err != nil {
+					err = fmt.Errorf("%w; panic %v", err, r)
+				} else {
+					err = fmt.Errorf("panic %v", r)
+				}
+			}
+		}()
 		t.loopy = newLoopyWriter(clientSide, t.framer, t.controlBuf, t.bdpEst)
 		err := t.loopy.run()
 		if err != nil {
