@@ -1,4 +1,4 @@
-module github.com/spirt-t/grpc-go
+module github.com/Tonsofattraction/grpc-go
 
 go 1.11
 
