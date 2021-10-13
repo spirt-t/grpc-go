@@ -19,6 +19,7 @@
 package priority
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func subConnFromPicker(t *testing.T, p balancer.Picker) func() balancer.SubConn 
 // Init 0 and 1; 0 is up, use 0; add 2, use 0; remove 2, use 0.
 func (s) TestPriority_HighPriorityReady(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -95,10 +96,10 @@ func (s) TestPriority_HighPriorityReady(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -132,11 +133,11 @@ func (s) TestPriority_HighPriorityReady(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[2]}, []string{"child-2"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-2": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-2": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1", "child-2"},
 		},
@@ -162,10 +163,10 @@ func (s) TestPriority_HighPriorityReady(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -190,7 +191,7 @@ func (s) TestPriority_HighPriorityReady(t *testing.T) {
 // down, use 2; remove 2, use 1.
 func (s) TestPriority_SwitchPriority(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -202,10 +203,10 @@ func (s) TestPriority_SwitchPriority(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -269,11 +270,11 @@ func (s) TestPriority_SwitchPriority(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[2]}, []string{"child-2"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-2": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-2": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1", "child-2"},
 		},
@@ -328,10 +329,10 @@ func (s) TestPriority_SwitchPriority(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -373,7 +374,7 @@ func (s) TestPriority_SwitchPriority(t *testing.T) {
 // use 0.
 func (s) TestPriority_HighPriorityToConnectingFromReady(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -385,10 +386,10 @@ func (s) TestPriority_HighPriorityToConnectingFromReady(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -468,7 +469,7 @@ func (s) TestPriority_HighPriorityToConnectingFromReady(t *testing.T) {
 // Init 0 and 1; 0 and 1 both down; add 2, use 2.
 func (s) TestPriority_HigherDownWhileAddingLower(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -480,10 +481,10 @@ func (s) TestPriority_HigherDownWhileAddingLower(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -534,11 +535,11 @@ func (s) TestPriority_HigherDownWhileAddingLower(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[2]}, []string{"child-2"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-2": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-2": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1", "child-2"},
 		},
@@ -579,7 +580,7 @@ func (s) TestPriority_HigherReadyCloseAllLower(t *testing.T) {
 	// defer time.Sleep(10 * time.Millisecond)
 
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -592,11 +593,11 @@ func (s) TestPriority_HigherReadyCloseAllLower(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[2]}, []string{"child-2"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-2": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-2": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1", "child-2"},
 		},
@@ -687,15 +688,15 @@ func (s) TestPriority_HigherReadyCloseAllLower(t *testing.T) {
 func (s) TestPriority_InitTimeout(t *testing.T) {
 	const testPriorityInitTimeout = time.Second
 	defer func() func() {
-		old := defaultPriorityInitTimeout
-		defaultPriorityInitTimeout = testPriorityInitTimeout
+		old := DefaultPriorityInitTimeout
+		DefaultPriorityInitTimeout = testPriorityInitTimeout
 		return func() {
-			defaultPriorityInitTimeout = old
+			DefaultPriorityInitTimeout = old
 		}
 	}()()
 
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -707,10 +708,10 @@ func (s) TestPriority_InitTimeout(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -757,15 +758,15 @@ func (s) TestPriority_InitTimeout(t *testing.T) {
 func (s) TestPriority_RemovesAllPriorities(t *testing.T) {
 	const testPriorityInitTimeout = time.Second
 	defer func() func() {
-		old := defaultPriorityInitTimeout
-		defaultPriorityInitTimeout = testPriorityInitTimeout
+		old := DefaultPriorityInitTimeout
+		DefaultPriorityInitTimeout = testPriorityInitTimeout
 		return func() {
-			defaultPriorityInitTimeout = old
+			DefaultPriorityInitTimeout = old
 		}
 	}()()
 
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -777,10 +778,10 @@ func (s) TestPriority_RemovesAllPriorities(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -808,7 +809,7 @@ func (s) TestPriority_RemovesAllPriorities(t *testing.T) {
 		ResolverState: resolver.State{
 			Addresses: nil,
 		},
-		BalancerConfig: &lbConfig{
+		BalancerConfig: &LBConfig{
 			Children:   nil,
 			Priorities: nil,
 		},
@@ -825,8 +826,8 @@ func (s) TestPriority_RemovesAllPriorities(t *testing.T) {
 	// Test pick return TransientFailure.
 	pFail := <-cc.NewPickerCh
 	for i := 0; i < 5; i++ {
-		if _, err := pFail.Pick(balancer.PickInfo{}); err != errAllPrioritiesRemoved {
-			t.Fatalf("want pick error %v, got %v", errAllPrioritiesRemoved, err)
+		if _, err := pFail.Pick(balancer.PickInfo{}); err != ErrAllPrioritiesRemoved {
+			t.Fatalf("want pick error %v, got %v", ErrAllPrioritiesRemoved, err)
 		}
 	}
 
@@ -838,10 +839,10 @@ func (s) TestPriority_RemovesAllPriorities(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[3]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -882,9 +883,9 @@ func (s) TestPriority_RemovesAllPriorities(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[2]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -933,7 +934,7 @@ func (s) TestPriority_RemovesAllPriorities(t *testing.T) {
 // will be used.
 func (s) TestPriority_HighPriorityNoEndpoints(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -945,10 +946,10 @@ func (s) TestPriority_HighPriorityNoEndpoints(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -980,10 +981,10 @@ func (s) TestPriority_HighPriorityNoEndpoints(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -1027,12 +1028,12 @@ func (s) TestPriority_HighPriorityNoEndpoints(t *testing.T) {
 func (s) TestPriority_FirstPriorityUnavailable(t *testing.T) {
 	const testPriorityInitTimeout = time.Second
 	defer func(t time.Duration) {
-		defaultPriorityInitTimeout = t
-	}(defaultPriorityInitTimeout)
-	defaultPriorityInitTimeout = testPriorityInitTimeout
+		DefaultPriorityInitTimeout = t
+	}(DefaultPriorityInitTimeout)
+	DefaultPriorityInitTimeout = testPriorityInitTimeout
 
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -1043,9 +1044,9 @@ func (s) TestPriority_FirstPriorityUnavailable(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -1058,7 +1059,7 @@ func (s) TestPriority_FirstPriorityUnavailable(t *testing.T) {
 		ResolverState: resolver.State{
 			Addresses: nil,
 		},
-		BalancerConfig: &lbConfig{
+		BalancerConfig: &LBConfig{
 			Children:   nil,
 			Priorities: nil,
 		},
@@ -1075,7 +1076,7 @@ func (s) TestPriority_FirstPriorityUnavailable(t *testing.T) {
 // Init a(p0) and b(p1); a(p0) is up, use a; move b to p0, a to p1, use b.
 func (s) TestPriority_MoveChildToHigherPriority(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -1087,10 +1088,10 @@ func (s) TestPriority_MoveChildToHigherPriority(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -1124,10 +1125,10 @@ func (s) TestPriority_MoveChildToHigherPriority(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-1", "child-0"},
 		},
@@ -1176,7 +1177,7 @@ func (s) TestPriority_MoveChildToHigherPriority(t *testing.T) {
 // Init a(p0) and b(p1); a(p0) is down, use b; move b to p0, a to p1, use b.
 func (s) TestPriority_MoveReadyChildToHigherPriority(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -1188,10 +1189,10 @@ func (s) TestPriority_MoveReadyChildToHigherPriority(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -1240,10 +1241,10 @@ func (s) TestPriority_MoveReadyChildToHigherPriority(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-1", "child-0"},
 		},
@@ -1276,7 +1277,7 @@ func (s) TestPriority_MoveReadyChildToHigherPriority(t *testing.T) {
 // Init a(p0) and b(p1); a(p0) is down, use b; move b to p0, a to p1, use b.
 func (s) TestPriority_RemoveReadyLowestChild(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -1288,10 +1289,10 @@ func (s) TestPriority_RemoveReadyLowestChild(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
-				"child-1": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0", "child-1"},
 		},
@@ -1338,9 +1339,9 @@ func (s) TestPriority_RemoveReadyLowestChild(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -1384,7 +1385,7 @@ func (s) TestPriority_ReadyChildRemovedButInCache(t *testing.T) {
 	}()()
 
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -1395,9 +1396,9 @@ func (s) TestPriority_ReadyChildRemovedButInCache(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -1426,15 +1427,15 @@ func (s) TestPriority_ReadyChildRemovedButInCache(t *testing.T) {
 	// be different.
 	if err := pb.UpdateClientConnState(balancer.ClientConnState{
 		ResolverState:  resolver.State{},
-		BalancerConfig: &lbConfig{},
+		BalancerConfig: &LBConfig{},
 	}); err != nil {
 		t.Fatalf("failed to update ClientConn state: %v", err)
 	}
 
 	pFail := <-cc.NewPickerCh
 	for i := 0; i < 5; i++ {
-		if _, err := pFail.Pick(balancer.PickInfo{}); err != errAllPrioritiesRemoved {
-			t.Fatalf("want pick error %v, got %v", errAllPrioritiesRemoved, err)
+		if _, err := pFail.Pick(balancer.PickInfo{}); err != ErrAllPrioritiesRemoved {
+			t.Fatalf("want pick error %v, got %v", ErrAllPrioritiesRemoved, err)
 		}
 	}
 
@@ -1454,9 +1455,9 @@ func (s) TestPriority_ReadyChildRemovedButInCache(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -1487,7 +1488,7 @@ func (s) TestPriority_ReadyChildRemovedButInCache(t *testing.T) {
 // Init 0; 0 is up, use 0; change 0's policy, 0 is used.
 func (s) TestPriority_ChildPolicyChange(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -1498,9 +1499,9 @@ func (s) TestPriority_ChildPolicyChange(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: roundrobin.Name}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -1533,9 +1534,9 @@ func (s) TestPriority_ChildPolicyChange(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: testRRBalancerName}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: testRRBalancerName}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -1587,7 +1588,7 @@ func init() {
 // by acquiring a locked mutex.
 func (s) TestPriority_ChildPolicyUpdatePickerInline(t *testing.T) {
 	cc := testutils.NewTestClientConn(t)
-	bb := balancer.Get(priorityBalancerName)
+	bb := balancer.Get(Name)
 	pb := bb.Build(cc, balancer.BuildOptions{})
 	defer pb.Close()
 
@@ -1598,9 +1599,9 @@ func (s) TestPriority_ChildPolicyUpdatePickerInline(t *testing.T) {
 				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
 			},
 		},
-		BalancerConfig: &lbConfig{
-			Children: map[string]*child{
-				"child-0": {&internalserviceconfig.BalancerConfig{Name: inlineUpdateBalancerName}},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: inlineUpdateBalancerName}},
 			},
 			Priorities: []string{"child-0"},
 		},
@@ -1614,5 +1615,262 @@ func (s) TestPriority_ChildPolicyUpdatePickerInline(t *testing.T) {
 		if err != errTestInlineStateUpdate {
 			t.Fatalf("picker.Pick, got err %q, want err %q", err, errTestInlineStateUpdate)
 		}
+	}
+}
+
+// When the child policy's configured to ignore reresolution requests, the
+// ResolveNow() calls from this child should be all ignored.
+func (s) TestPriority_IgnoreReresolutionRequest(t *testing.T) {
+	cc := testutils.NewTestClientConn(t)
+	bb := balancer.Get(Name)
+	pb := bb.Build(cc, balancer.BuildOptions{})
+	defer pb.Close()
+
+	// One children, with priorities [0], with one backend, reresolution is
+	// ignored.
+	if err := pb.UpdateClientConnState(balancer.ClientConnState{
+		ResolverState: resolver.State{
+			Addresses: []resolver.Address{
+				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
+			},
+		},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {
+					Config:                     &internalserviceconfig.BalancerConfig{Name: resolveNowBalancerName},
+					IgnoreReresolutionRequests: true,
+				},
+			},
+			Priorities: []string{"child-0"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to update ClientConn state: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	// This is the balancer.ClientConn that the inner resolverNowBalancer is
+	// built with.
+	balancerCCI, err := resolveNowBalancerCCCh.Receive(ctx)
+	if err != nil {
+		t.Fatalf("timeout waiting for ClientConn from balancer builder")
+	}
+	balancerCC := balancerCCI.(balancer.ClientConn)
+
+	// Since IgnoreReresolutionRequests was set to true, all ResolveNow() calls
+	// should be ignored.
+	for i := 0; i < 5; i++ {
+		balancerCC.ResolveNow(resolver.ResolveNowOptions{})
+	}
+	select {
+	case <-cc.ResolveNowCh:
+		t.Fatalf("got unexpected ResolveNow() call")
+	case <-time.After(time.Millisecond * 100):
+	}
+
+	// Send another update to set IgnoreReresolutionRequests to false.
+	if err := pb.UpdateClientConnState(balancer.ClientConnState{
+		ResolverState: resolver.State{
+			Addresses: []resolver.Address{
+				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
+			},
+		},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {
+					Config:                     &internalserviceconfig.BalancerConfig{Name: resolveNowBalancerName},
+					IgnoreReresolutionRequests: false,
+				},
+			},
+			Priorities: []string{"child-0"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to update ClientConn state: %v", err)
+	}
+
+	// Call ResolveNow() on the CC, it should be forwarded.
+	balancerCC.ResolveNow(resolver.ResolveNowOptions{})
+	select {
+	case <-cc.ResolveNowCh:
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting for ResolveNow()")
+	}
+
+}
+
+// When the child policy's configured to ignore reresolution requests, the
+// ResolveNow() calls from this child should be all ignored, from the other
+// children are forwarded.
+func (s) TestPriority_IgnoreReresolutionRequestTwoChildren(t *testing.T) {
+	cc := testutils.NewTestClientConn(t)
+	bb := balancer.Get(Name)
+	pb := bb.Build(cc, balancer.BuildOptions{})
+	defer pb.Close()
+
+	// One children, with priorities [0, 1], each with one backend.
+	// Reresolution is ignored for p0.
+	if err := pb.UpdateClientConnState(balancer.ClientConnState{
+		ResolverState: resolver.State{
+			Addresses: []resolver.Address{
+				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
+				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
+			},
+		},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {
+					Config:                     &internalserviceconfig.BalancerConfig{Name: resolveNowBalancerName},
+					IgnoreReresolutionRequests: true,
+				},
+				"child-1": {
+					Config: &internalserviceconfig.BalancerConfig{Name: resolveNowBalancerName},
+				},
+			},
+			Priorities: []string{"child-0", "child-1"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to update ClientConn state: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	// This is the balancer.ClientConn from p0.
+	balancerCCI0, err := resolveNowBalancerCCCh.Receive(ctx)
+	if err != nil {
+		t.Fatalf("timeout waiting for ClientConn from balancer builder 0")
+	}
+	balancerCC0 := balancerCCI0.(balancer.ClientConn)
+
+	// Set p0 to transient failure, p1 will be started.
+	addrs0 := <-cc.NewSubConnAddrsCh
+	if got, want := addrs0[0].Addr, testBackendAddrStrs[0]; got != want {
+		t.Fatalf("sc is created with addr %v, want %v", got, want)
+	}
+	sc0 := <-cc.NewSubConnCh
+	pb.UpdateSubConnState(sc0, balancer.SubConnState{ConnectivityState: connectivity.TransientFailure})
+
+	// This is the balancer.ClientConn from p1.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel1()
+	balancerCCI1, err := resolveNowBalancerCCCh.Receive(ctx1)
+	if err != nil {
+		t.Fatalf("timeout waiting for ClientConn from balancer builder 1")
+	}
+	balancerCC1 := balancerCCI1.(balancer.ClientConn)
+
+	// Since IgnoreReresolutionRequests was set to true for p0, ResolveNow()
+	// from p0 should all be ignored.
+	for i := 0; i < 5; i++ {
+		balancerCC0.ResolveNow(resolver.ResolveNowOptions{})
+	}
+	select {
+	case <-cc.ResolveNowCh:
+		t.Fatalf("got unexpected ResolveNow() call")
+	case <-time.After(time.Millisecond * 100):
+	}
+
+	// But IgnoreReresolutionRequests was false for p1, ResolveNow() from p1
+	// should be forwarded.
+	balancerCC1.ResolveNow(resolver.ResolveNowOptions{})
+	select {
+	case <-cc.ResolveNowCh:
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting for ResolveNow()")
+	}
+}
+
+const initIdleBalancerName = "test-init-Idle-balancer"
+
+var errsTestInitIdle = []error{
+	fmt.Errorf("init Idle balancer error 0"),
+	fmt.Errorf("init Idle balancer error 1"),
+}
+
+func init() {
+	for i := 0; i < 2; i++ {
+		ii := i
+		stub.Register(fmt.Sprintf("%s-%d", initIdleBalancerName, ii), stub.BalancerFuncs{
+			UpdateClientConnState: func(bd *stub.BalancerData, opts balancer.ClientConnState) error {
+				bd.ClientConn.NewSubConn(opts.ResolverState.Addresses, balancer.NewSubConnOptions{})
+				return nil
+			},
+			UpdateSubConnState: func(bd *stub.BalancerData, sc balancer.SubConn, state balancer.SubConnState) {
+				err := fmt.Errorf("wrong picker error")
+				if state.ConnectivityState == connectivity.Idle {
+					err = errsTestInitIdle[ii]
+				}
+				bd.ClientConn.UpdateState(balancer.State{
+					ConnectivityState: state.ConnectivityState,
+					Picker:            &testutils.TestConstPicker{Err: err},
+				})
+			},
+		})
+	}
+}
+
+// If the high priorities send initial pickers with Idle state, their pickers
+// should get picks, because policies like ringhash starts in Idle, and doesn't
+// connect.
+//
+// Init 0, 1; 0 is Idle, use 0; 0 is down, start 1; 1 is Idle, use 1.
+func (s) TestPriority_HighPriorityInitIdle(t *testing.T) {
+	cc := testutils.NewTestClientConn(t)
+	bb := balancer.Get(Name)
+	pb := bb.Build(cc, balancer.BuildOptions{})
+	defer pb.Close()
+
+	// Two children, with priorities [0, 1], each with one backend.
+	if err := pb.UpdateClientConnState(balancer.ClientConnState{
+		ResolverState: resolver.State{
+			Addresses: []resolver.Address{
+				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[0]}, []string{"child-0"}),
+				hierarchy.Set(resolver.Address{Addr: testBackendAddrStrs[1]}, []string{"child-1"}),
+			},
+		},
+		BalancerConfig: &LBConfig{
+			Children: map[string]*Child{
+				"child-0": {Config: &internalserviceconfig.BalancerConfig{Name: fmt.Sprintf("%s-%d", initIdleBalancerName, 0)}},
+				"child-1": {Config: &internalserviceconfig.BalancerConfig{Name: fmt.Sprintf("%s-%d", initIdleBalancerName, 1)}},
+			},
+			Priorities: []string{"child-0", "child-1"},
+		},
+	}); err != nil {
+		t.Fatalf("failed to update ClientConn state: %v", err)
+	}
+
+	addrs0 := <-cc.NewSubConnAddrsCh
+	if got, want := addrs0[0].Addr, testBackendAddrStrs[0]; got != want {
+		t.Fatalf("sc is created with addr %v, want %v", got, want)
+	}
+	sc0 := <-cc.NewSubConnCh
+
+	// Send an Idle state update to trigger an Idle picker update.
+	pb.UpdateSubConnState(sc0, balancer.SubConnState{ConnectivityState: connectivity.Idle})
+	p0 := <-cc.NewPickerCh
+	if pr, err := p0.Pick(balancer.PickInfo{}); err != errsTestInitIdle[0] {
+		t.Fatalf("pick returned %v, %v, want _, %v", pr, err, errsTestInitIdle[0])
+	}
+
+	// Turn p0 down, to start p1.
+	pb.UpdateSubConnState(sc0, balancer.SubConnState{ConnectivityState: connectivity.TransientFailure})
+	// Before 1 gets READY, picker should return NoSubConnAvailable, so RPCs
+	// will retry.
+	p1 := <-cc.NewPickerCh
+	for i := 0; i < 5; i++ {
+		if _, err := p1.Pick(balancer.PickInfo{}); err != balancer.ErrNoSubConnAvailable {
+			t.Fatalf("want pick error %v, got %v", balancer.ErrNoSubConnAvailable, err)
+		}
+	}
+
+	addrs1 := <-cc.NewSubConnAddrsCh
+	if got, want := addrs1[0].Addr, testBackendAddrStrs[1]; got != want {
+		t.Fatalf("sc is created with addr %v, want %v", got, want)
+	}
+	sc1 := <-cc.NewSubConnCh
+	// Idle picker from p1 should also be forwarded.
+	pb.UpdateSubConnState(sc1, balancer.SubConnState{ConnectivityState: connectivity.Idle})
+	p2 := <-cc.NewPickerCh
+	if pr, err := p2.Pick(balancer.PickInfo{}); err != errsTestInitIdle[1] {
+		t.Fatalf("pick returned %v, %v, want _, %v", pr, err, errsTestInitIdle[1])
 	}
 }

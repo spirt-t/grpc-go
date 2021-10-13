@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/balancer/roundrobin"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/internal/balancer/stub"
 	"google.golang.org/grpc/internal/hierarchy"
 	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/serviceconfig"
@@ -103,7 +104,7 @@ func init() {
 	for i := 0; i < testBackendAddrsCount; i++ {
 		testBackendAddrStrs = append(testBackendAddrStrs, fmt.Sprintf("%d.%d.%d.%d:%d", i, i, i, i, i))
 	}
-	wtbBuilder = balancer.Get(weightedTargetName)
+	wtbBuilder = balancer.Get(Name)
 	wtbParser = wtbBuilder.(balancer.ConfigParser)
 
 	balancergroup.DefaultSubBalancerCloseTimeout = time.Millisecond
@@ -215,11 +216,111 @@ func TestWeightedTarget(t *testing.T) {
 	if err := testutils.IsRoundRobin(want, subConnFromPicker(p2)); err != nil {
 		t.Fatalf("want %v, got %v", want, err)
 	}
+
+	// Replace child policy of "cluster_1" to "round_robin".
+	config3, err := wtbParser.ParseConfig([]byte(`{"targets":{"cluster_2":{"weight":1,"childPolicy":[{"round_robin":""}]}}}`))
+	if err != nil {
+		t.Fatalf("failed to parse balancer config: %v", err)
+	}
+
+	// Send the config, and an address with hierarchy path ["cluster_1"].
+	wantAddr4 := resolver.Address{Addr: testBackendAddrStrs[0], Attributes: nil}
+	if err := wtb.UpdateClientConnState(balancer.ClientConnState{
+		ResolverState: resolver.State{Addresses: []resolver.Address{
+			hierarchy.Set(wantAddr4, []string{"cluster_2"}),
+		}},
+		BalancerConfig: config3,
+	}); err != nil {
+		t.Fatalf("failed to update ClientConn state: %v", err)
+	}
+
+	// Verify that a subconn is created with the address, and the hierarchy path
+	// in the address is cleared.
+	addr4 := <-cc.NewSubConnAddrsCh
+	if want := []resolver.Address{
+		hierarchy.Set(wantAddr4, []string{}),
+	}; !cmp.Equal(addr4, want, cmp.AllowUnexported(attributes.Attributes{})) {
+		t.Fatalf("got unexpected new subconn addrs: %v", cmp.Diff(addr4, want, cmp.AllowUnexported(attributes.Attributes{})))
+	}
+
+	// Send subconn state change.
+	sc4 := <-cc.NewSubConnCh
+	wtb.UpdateSubConnState(sc4, balancer.SubConnState{ConnectivityState: connectivity.Connecting})
+	wtb.UpdateSubConnState(sc4, balancer.SubConnState{ConnectivityState: connectivity.Ready})
+
+	// Test pick with one backend.
+	p3 := <-cc.NewPickerCh
+	for i := 0; i < 5; i++ {
+		gotSCSt, _ := p3.Pick(balancer.PickInfo{})
+		if !cmp.Equal(gotSCSt.SubConn, sc4, cmp.AllowUnexported(testutils.TestSubConn{})) {
+			t.Fatalf("picker.Pick, got %v, want SubConn=%v", gotSCSt, sc4)
+		}
+	}
 }
 
 func subConnFromPicker(p balancer.Picker) func() balancer.SubConn {
 	return func() balancer.SubConn {
 		scst, _ := p.Pick(balancer.PickInfo{})
 		return scst.SubConn
+	}
+}
+
+const initIdleBalancerName = "test-init-Idle-balancer"
+
+var errTestInitIdle = fmt.Errorf("init Idle balancer error 0")
+
+func init() {
+	stub.Register(initIdleBalancerName, stub.BalancerFuncs{
+		UpdateClientConnState: func(bd *stub.BalancerData, opts balancer.ClientConnState) error {
+			bd.ClientConn.NewSubConn(opts.ResolverState.Addresses, balancer.NewSubConnOptions{})
+			return nil
+		},
+		UpdateSubConnState: func(bd *stub.BalancerData, sc balancer.SubConn, state balancer.SubConnState) {
+			err := fmt.Errorf("wrong picker error")
+			if state.ConnectivityState == connectivity.Idle {
+				err = errTestInitIdle
+			}
+			bd.ClientConn.UpdateState(balancer.State{
+				ConnectivityState: state.ConnectivityState,
+				Picker:            &testutils.TestConstPicker{Err: err},
+			})
+		},
+	})
+}
+
+// TestInitialIdle covers the case that if the child reports Idle, the overall
+// state will be Idle.
+func TestInitialIdle(t *testing.T) {
+	cc := testutils.NewTestClientConn(t)
+	wtb := wtbBuilder.Build(cc, balancer.BuildOptions{})
+
+	// Start with "cluster_1: round_robin".
+	config1, err := wtbParser.ParseConfig([]byte(`{"targets":{"cluster_1":{"weight":1,"childPolicy":[{"test-init-Idle-balancer":""}]}}}`))
+	if err != nil {
+		t.Fatalf("failed to parse balancer config: %v", err)
+	}
+
+	// Send the config, and an address with hierarchy path ["cluster_1"].
+	wantAddrs := []resolver.Address{
+		{Addr: testBackendAddrStrs[0], Attributes: nil},
+	}
+	if err := wtb.UpdateClientConnState(balancer.ClientConnState{
+		ResolverState: resolver.State{Addresses: []resolver.Address{
+			hierarchy.Set(wantAddrs[0], []string{"cds:cluster_1"}),
+		}},
+		BalancerConfig: config1,
+	}); err != nil {
+		t.Fatalf("failed to update ClientConn state: %v", err)
+	}
+
+	// Verify that a subconn is created with the address, and the hierarchy path
+	// in the address is cleared.
+	for range wantAddrs {
+		sc := <-cc.NewSubConnCh
+		wtb.UpdateSubConnState(sc, balancer.SubConnState{ConnectivityState: connectivity.Idle})
+	}
+
+	if state1 := <-cc.NewStateCh; state1 != connectivity.Idle {
+		t.Fatalf("Received aggregated state: %v, want Idle", state1)
 	}
 }

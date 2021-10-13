@@ -323,7 +323,7 @@ func (s *server) start(t *testing.T, port int, serverConfig *ServerConfig, ht hT
 		if err != nil {
 			return
 		}
-		transport, err := NewServerTransport("http2", conn, serverConfig)
+		transport, err := NewServerTransport(conn, serverConfig)
 		if err != nil {
 			return
 		}
@@ -481,7 +481,7 @@ func (s) TestInflightStreamClosing(t *testing.T) {
 	server, client, cancel := setUpWithOptions(t, 0, serverConfig, suspended, ConnectOptions{})
 	defer cancel()
 	defer server.stop()
-	defer client.Close()
+	defer client.Close(fmt.Errorf("closed manually by test"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
@@ -550,7 +550,7 @@ func (s) TestClientSendAndReceive(t *testing.T) {
 	if recvErr != io.EOF {
 		t.Fatalf("Error: %v; want <EOF>", recvErr)
 	}
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 	server.stop()
 }
 
@@ -560,7 +560,7 @@ func (s) TestClientErrorNotify(t *testing.T) {
 	go server.stop()
 	// ct.reader should detect the error and activate ct.Error().
 	<-ct.Error()
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 }
 
 func performOneRPC(ct ClientTransport) {
@@ -597,7 +597,7 @@ func (s) TestClientMix(t *testing.T) {
 	}(s)
 	go func(ct ClientTransport) {
 		<-ct.Error()
-		ct.Close()
+		ct.Close(fmt.Errorf("closed manually by test"))
 	}(ct)
 	for i := 0; i < 1000; i++ {
 		time.Sleep(10 * time.Millisecond)
@@ -636,7 +636,7 @@ func (s) TestLargeMessage(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 	server.stop()
 }
 
@@ -653,7 +653,7 @@ func (s) TestLargeMessageWithDelayRead(t *testing.T) {
 	server, ct, cancel := setUpWithOptions(t, 0, sc, delayRead, co)
 	defer cancel()
 	defer server.stop()
-	defer ct.Close()
+	defer ct.Close(fmt.Errorf("closed manually by test"))
 	server.mu.Lock()
 	ready := server.ready
 	server.mu.Unlock()
@@ -780,7 +780,7 @@ func (s) TestGracefulClose(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			str, err := ct.NewStream(ctx, &CallHdr{})
-			if err == ErrConnClosing {
+			if err != nil && err.(*NewStreamError).Err == ErrConnClosing {
 				return
 			} else if err != nil {
 				t.Errorf("_.NewStream(_, _) = _, %v, want _, %v", err, ErrConnClosing)
@@ -831,7 +831,7 @@ func (s) TestLargeMessageSuspension(t *testing.T) {
 	if _, err := s.Read(make([]byte, 8)); err.Error() != expectedErr.Error() {
 		t.Fatalf("Read got %v of type %T, want %v", err, err, expectedErr)
 	}
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 	server.stop()
 }
 
@@ -841,7 +841,7 @@ func (s) TestMaxStreams(t *testing.T) {
 	}
 	server, ct, cancel := setUpWithOptions(t, 0, serverConfig, suspended, ConnectOptions{})
 	defer cancel()
-	defer ct.Close()
+	defer ct.Close(fmt.Errorf("closed manually by test"))
 	defer server.stop()
 	callHdr := &CallHdr{
 		Host:   "localhost",
@@ -901,7 +901,7 @@ func (s) TestMaxStreams(t *testing.T) {
 	// Close the first stream created so that the new stream can finally be created.
 	ct.CloseStream(s, nil)
 	<-done
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 	<-ct.writerDone
 	if ct.maxConcurrentStreams != 1 {
 		t.Fatalf("ct.maxConcurrentStreams: %d, want 1", ct.maxConcurrentStreams)
@@ -960,7 +960,7 @@ func (s) TestServerContextCanceledOnClosedConnection(t *testing.T) {
 		sc.mu.Unlock()
 		break
 	}
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 	select {
 	case <-ss.Context().Done():
 		if ss.Context().Err() != context.Canceled {
@@ -980,7 +980,7 @@ func (s) TestClientConnDecoupledFromApplicationRead(t *testing.T) {
 	server, client, cancel := setUpWithOptions(t, 0, &ServerConfig{}, notifyCall, connectOptions)
 	defer cancel()
 	defer server.stop()
-	defer client.Close()
+	defer client.Close(fmt.Errorf("closed manually by test"))
 
 	waitWhileTrue(t, func() (bool, error) {
 		server.mu.Lock()
@@ -1069,7 +1069,7 @@ func (s) TestServerConnDecoupledFromApplicationRead(t *testing.T) {
 	server, client, cancel := setUpWithOptions(t, 0, serverConfig, suspended, ConnectOptions{})
 	defer cancel()
 	defer server.stop()
-	defer client.Close()
+	defer client.Close(fmt.Errorf("closed manually by test"))
 	waitWhileTrue(t, func() (bool, error) {
 		server.mu.Lock()
 		defer server.mu.Unlock()
@@ -1302,7 +1302,7 @@ func (s) TestClientWithMisbehavedServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error while creating client transport: %v", err)
 	}
-	defer ct.Close()
+	defer ct.Close(fmt.Errorf("closed manually by test"))
 	str, err := ct.NewStream(connectCtx, &CallHdr{})
 	if err != nil {
 		t.Fatalf("Error while creating stream: %v", err)
@@ -1345,7 +1345,7 @@ func (s) TestEncodingRequiredStatus(t *testing.T) {
 	if !testutils.StatusErrEqual(s.Status().Err(), encodingTestStatus.Err()) {
 		t.Fatalf("stream with status %v, want %v", s.Status(), encodingTestStatus)
 	}
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 	server.stop()
 }
 
@@ -1367,7 +1367,7 @@ func (s) TestInvalidHeaderField(t *testing.T) {
 	if se, ok := status.FromError(err); !ok || se.Code() != codes.Internal || !strings.Contains(err.Error(), expectedInvalidHeaderField) {
 		t.Fatalf("Read got error %v, want error with code %s and contains %q", err, codes.Internal, expectedInvalidHeaderField)
 	}
-	ct.Close()
+	ct.Close(fmt.Errorf("closed manually by test"))
 	server.stop()
 }
 
@@ -1375,7 +1375,7 @@ func (s) TestHeaderChanClosedAfterReceivingAnInvalidHeader(t *testing.T) {
 	server, ct, cancel := setUp(t, 0, math.MaxUint32, invalidHeaderField)
 	defer cancel()
 	defer server.stop()
-	defer ct.Close()
+	defer ct.Close(fmt.Errorf("closed manually by test"))
 	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer cancel()
 	s, err := ct.NewStream(ctx, &CallHdr{Host: "localhost", Method: "foo"})
@@ -1481,7 +1481,7 @@ func testFlowControlAccountCheck(t *testing.T, msgSize int, wc windowSizeConfig)
 	server, client, cancel := setUpWithOptions(t, 0, sc, pingpong, co)
 	defer cancel()
 	defer server.stop()
-	defer client.Close()
+	defer client.Close(fmt.Errorf("closed manually by test"))
 	waitWhileTrue(t, func() (bool, error) {
 		server.mu.Lock()
 		defer server.mu.Unlock()
@@ -1563,7 +1563,7 @@ func testFlowControlAccountCheck(t *testing.T, msgSize int, wc windowSizeConfig)
 	}
 	// Close down both server and client so that their internals can be read without data
 	// races.
-	client.Close()
+	client.Close(fmt.Errorf("closed manually by test"))
 	st.Close()
 	<-st.readerDone
 	<-st.writerDone
@@ -1663,81 +1663,291 @@ func (s) TestReadGivesSameErrorAfterAnyErrorOccurs(t *testing.T) {
 	}
 }
 
-// If the client sends an HTTP/2 request with a :method header with a value other than POST, as specified in
-// the gRPC over HTTP/2 specification, the server should close the stream.
-func (s) TestServerWithClientSendingWrongMethod(t *testing.T) {
-	server := setUpServerOnly(t, 0, &ServerConfig{}, suspended)
-	defer server.stop()
-	// Create a client directly to not couple what you can send to API of http2_client.go.
-	mconn, err := net.Dial("tcp", server.lis.Addr().String())
-	if err != nil {
-		t.Fatalf("Client failed to dial: %v", err)
+// TestHeadersCausingStreamError tests headers that should cause a stream protocol
+// error, which would end up with a RST_STREAM being sent to the client and also
+// the server closing the stream.
+func (s) TestHeadersCausingStreamError(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers []struct {
+			name   string
+			values []string
+		}
+	}{
+		// If the client sends an HTTP/2 request with a :method header with a
+		// value other than POST, as specified in the gRPC over HTTP/2
+		// specification, the server should close the stream.
+		{
+			name: "Client Sending Wrong Method",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"PUT"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost"}},
+				{name: "content-type", values: []string{"application/grpc"}},
+			},
+		},
+		// "Transports must consider requests containing the Connection header
+		// as malformed" - A41 Malformed requests map to a stream error of type
+		// PROTOCOL_ERROR.
+		{
+			name: "Connection header present",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"POST"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost"}},
+				{name: "content-type", values: []string{"application/grpc"}},
+				{name: "connection", values: []string{"not-supported"}},
+			},
+		},
+		// multiple :authority or multiple Host headers would make the eventual
+		// :authority ambiguous as per A41. Since these headers won't have a
+		// content-type that corresponds to a grpc-client, the server should
+		// simply write a RST_STREAM to the wire.
+		{
+			// Note: multiple authority headers are handled by the framer
+			// itself, which will cause a stream error. Thus, it will never get
+			// to operateHeaders with the check in operateHeaders for stream
+			// error, but the server transport will still send a stream error.
+			name: "Multiple authority headers",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"POST"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost", "localhost2"}},
+				{name: "host", values: []string{"localhost"}},
+			},
+		},
 	}
-	defer mconn.Close()
-
-	if n, err := mconn.Write(clientPreface); err != nil || n != len(clientPreface) {
-		t.Fatalf("mconn.Write(clientPreface) = %d, %v, want %d, <nil>", n, err, len(clientPreface))
-	}
-
-	framer := http2.NewFramer(mconn, mconn)
-	if err := framer.WriteSettings(); err != nil {
-		t.Fatalf("Error while writing settings: %v", err)
-	}
-
-	// success chan indicates that reader received a RSTStream from server.
-	// An error will be passed on it if any other frame is received.
-	success := testutils.NewChannel()
-
-	// Launch a reader goroutine.
-	go func() {
-		for {
-			frame, err := framer.ReadFrame()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := setUpServerOnly(t, 0, &ServerConfig{}, suspended)
+			defer server.stop()
+			// Create a client directly to not tie what you can send to API of
+			// http2_client.go (i.e. control headers being sent).
+			mconn, err := net.Dial("tcp", server.lis.Addr().String())
 			if err != nil {
-				return
+				t.Fatalf("Client failed to dial: %v", err)
 			}
-			switch frame := frame.(type) {
-			case *http2.SettingsFrame:
-				// Do nothing. A settings frame is expected from server preface.
-			case *http2.RSTStreamFrame:
-				if frame.Header().StreamID != 1 || http2.ErrCode(frame.ErrCode) != http2.ErrCodeProtocol {
-					// Client only created a single stream, so RST Stream should be for that single stream.
-					t.Errorf("RST stream received with streamID: %d and code %v, want streamID: 1 and code: http.ErrCodeFlowControl", frame.Header().StreamID, http2.ErrCode(frame.ErrCode))
+			defer mconn.Close()
+
+			if n, err := mconn.Write(clientPreface); err != nil || n != len(clientPreface) {
+				t.Fatalf("mconn.Write(clientPreface) = %d, %v, want %d, <nil>", n, err, len(clientPreface))
+			}
+
+			framer := http2.NewFramer(mconn, mconn)
+			if err := framer.WriteSettings(); err != nil {
+				t.Fatalf("Error while writing settings: %v", err)
+			}
+
+			// result chan indicates that reader received a RSTStream from server.
+			// An error will be passed on it if any other frame is received.
+			result := testutils.NewChannel()
+
+			// Launch a reader goroutine.
+			go func() {
+				for {
+					frame, err := framer.ReadFrame()
+					if err != nil {
+						return
+					}
+					switch frame := frame.(type) {
+					case *http2.SettingsFrame:
+						// Do nothing. A settings frame is expected from server preface.
+					case *http2.RSTStreamFrame:
+						if frame.Header().StreamID != 1 || http2.ErrCode(frame.ErrCode) != http2.ErrCodeProtocol {
+							// Client only created a single stream, so RST Stream should be for that single stream.
+							result.Send(fmt.Errorf("RST stream received with streamID: %d and code %v, want streamID: 1 and code: http.ErrCodeFlowControl", frame.Header().StreamID, http2.ErrCode(frame.ErrCode)))
+						}
+						// Records that client successfully received RST Stream frame.
+						result.Send(nil)
+						return
+					default:
+						// The server should send nothing but a single RST Stream frame.
+						result.Send(errors.New("the client received a frame other than RST Stream"))
+					}
 				}
-				// Records that client successfully received RST Stream frame.
-				success.Send(nil)
-				return
-			default:
-				// The server should send nothing but a single RST Stream frame.
-				success.Send(errors.New("The client received a frame other than RST Stream"))
+			}()
+
+			var buf bytes.Buffer
+			henc := hpack.NewEncoder(&buf)
+
+			// Needs to build headers deterministically to conform to gRPC over
+			// HTTP/2 spec.
+			for _, header := range test.headers {
+				for _, value := range header.values {
+					if err := henc.WriteField(hpack.HeaderField{Name: header.name, Value: value}); err != nil {
+						t.Fatalf("Error while encoding header: %v", err)
+					}
+				}
+			}
+
+			if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: buf.Bytes(), EndHeaders: true}); err != nil {
+				t.Fatalf("Error while writing headers: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+			defer cancel()
+			r, err := result.Receive(ctx)
+			if err != nil {
+				t.Fatalf("Error receiving from channel: %v", err)
+			}
+			if r != nil {
+				t.Fatalf("want nil, got %v", r)
+			}
+		})
+	}
+}
+
+// TestHeadersMultipleHosts tests that a request with multiple hosts gets
+// rejected with HTTP Status 400 and gRPC status Internal, regardless of whether
+// the client is speaking gRPC or not.
+func (s) TestHeadersMultipleHosts(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers []struct {
+			name   string
+			values []string
+		}
+	}{
+		// Note: multiple authority headers are handled by the framer itself,
+		// which will cause a stream error. Thus, it will never get to
+		// operateHeaders with the check in operateHeaders for possible grpc-status sent back.
+
+		// multiple :authority or multiple Host headers would make the eventual
+		// :authority ambiguous as per A41. This takes precedence even over the
+		// fact a request is non grpc. All of these requests should be rejected
+		// with grpc-status Internal.
+		{
+			name: "Multiple host headers non grpc",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"POST"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost"}},
+				{name: "host", values: []string{"localhost", "localhost2"}},
+			},
+		},
+		{
+			name: "Multiple host headers grpc",
+			headers: []struct {
+				name   string
+				values []string
+			}{
+				{name: ":method", values: []string{"POST"}},
+				{name: ":path", values: []string{"foo"}},
+				{name: ":authority", values: []string{"localhost"}},
+				{name: "content-type", values: []string{"application/grpc"}},
+				{name: "host", values: []string{"localhost", "localhost2"}},
+			},
+		},
+	}
+	for _, test := range tests {
+		server := setUpServerOnly(t, 0, &ServerConfig{}, suspended)
+		defer server.stop()
+		// Create a client directly to not tie what you can send to API of
+		// http2_client.go (i.e. control headers being sent).
+		mconn, err := net.Dial("tcp", server.lis.Addr().String())
+		if err != nil {
+			t.Fatalf("Client failed to dial: %v", err)
+		}
+		defer mconn.Close()
+
+		if n, err := mconn.Write(clientPreface); err != nil || n != len(clientPreface) {
+			t.Fatalf("mconn.Write(clientPreface) = %d, %v, want %d, <nil>", n, err, len(clientPreface))
+		}
+
+		framer := http2.NewFramer(mconn, mconn)
+		framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
+		if err := framer.WriteSettings(); err != nil {
+			t.Fatalf("Error while writing settings: %v", err)
+		}
+
+		// result chan indicates that reader received a Headers Frame with
+		// desired grpc status and message from server. An error will be passed
+		// on it if any other frame is received.
+		result := testutils.NewChannel()
+
+		// Launch a reader goroutine.
+		go func() {
+			for {
+				frame, err := framer.ReadFrame()
+				if err != nil {
+					return
+				}
+				switch frame := frame.(type) {
+				case *http2.SettingsFrame:
+					// Do nothing. A settings frame is expected from server preface.
+				case *http2.MetaHeadersFrame:
+					var status, grpcStatus, grpcMessage string
+					for _, header := range frame.Fields {
+						if header.Name == ":status" {
+							status = header.Value
+						}
+						if header.Name == "grpc-status" {
+							grpcStatus = header.Value
+						}
+						if header.Name == "grpc-message" {
+							grpcMessage = header.Value
+						}
+					}
+					if status != "400" {
+						result.Send(fmt.Errorf("incorrect HTTP Status got %v, want 200", status))
+						return
+					}
+					if grpcStatus != "13" { // grpc status code internal
+						result.Send(fmt.Errorf("incorrect gRPC Status got %v, want 13", grpcStatus))
+						return
+					}
+					if !strings.Contains(grpcMessage, "both must only have 1 value as per HTTP/2 spec") {
+						result.Send(fmt.Errorf("incorrect gRPC message"))
+						return
+					}
+
+					// Records that client successfully received a HeadersFrame
+					// with expected Trailers-Only response.
+					result.Send(nil)
+					return
+				default:
+					// The server should send nothing but a single Settings and Headers frame.
+					result.Send(errors.New("the client received a frame other than Settings or Headers"))
+				}
+			}
+		}()
+
+		var buf bytes.Buffer
+		henc := hpack.NewEncoder(&buf)
+
+		// Needs to build headers deterministically to conform to gRPC over
+		// HTTP/2 spec.
+		for _, header := range test.headers {
+			for _, value := range header.values {
+				if err := henc.WriteField(hpack.HeaderField{Name: header.name, Value: value}); err != nil {
+					t.Fatalf("Error while encoding header: %v", err)
+				}
 			}
 		}
-	}()
 
-	// Done with HTTP/2 setup - now create a stream with a bad method header.
-	var buf bytes.Buffer
-	henc := hpack.NewEncoder(&buf)
-	// Method is required to be POST in a gRPC call.
-	if err := henc.WriteField(hpack.HeaderField{Name: ":method", Value: "PUT"}); err != nil {
-		t.Fatalf("Error while encoding header: %v", err)
-	}
-	// Have the rest of the headers be ok and within the gRPC over HTTP/2 spec.
-	if err := henc.WriteField(hpack.HeaderField{Name: ":path", Value: "foo"}); err != nil {
-		t.Fatalf("Error while encoding header: %v", err)
-	}
-	if err := henc.WriteField(hpack.HeaderField{Name: ":authority", Value: "localhost"}); err != nil {
-		t.Fatalf("Error while encoding header: %v", err)
-	}
-	if err := henc.WriteField(hpack.HeaderField{Name: "content-type", Value: "application/grpc"}); err != nil {
-		t.Fatalf("Error while encoding header: %v", err)
-	}
-
-	if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: buf.Bytes(), EndHeaders: true}); err != nil {
-		t.Fatalf("Error while writing headers: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-	if e, err := success.Receive(ctx); e != nil || err != nil {
-		t.Fatalf("Error in frame server should send: %v. Error receiving from channel: %v", e, err)
+		if err := framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: buf.Bytes(), EndHeaders: true}); err != nil {
+			t.Fatalf("Error while writing headers: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+		defer cancel()
+		r, err := result.Receive(ctx)
+		if err != nil {
+			t.Fatalf("Error receiving from channel: %v", err)
+		}
+		if r != nil {
+			t.Fatalf("want nil, got %v", r)
+		}
 	}
 }
 
@@ -1762,7 +1972,7 @@ func runPingPongTest(t *testing.T, msgSize int) {
 	server, client, cancel := setUp(t, 0, 0, pingpong)
 	defer cancel()
 	defer server.stop()
-	defer client.Close()
+	defer client.Close(fmt.Errorf("closed manually by test"))
 	waitWhileTrue(t, func() (bool, error) {
 		server.mu.Lock()
 		defer server.mu.Unlock()
@@ -1850,7 +2060,7 @@ func (s) TestHeaderTblSize(t *testing.T) {
 
 	server, ct, cancel := setUp(t, 0, math.MaxUint32, normal)
 	defer cancel()
-	defer ct.Close()
+	defer ct.Close(fmt.Errorf("closed manually by test"))
 	defer server.stop()
 	ctx, ctxCancel := context.WithTimeout(context.Background(), defaultTestTimeout)
 	defer ctxCancel()
@@ -1969,10 +2179,186 @@ func (s) TestClientHandshakeInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClientTransport(): %v", err)
 	}
-	defer tr.Close()
+	defer tr.Close(fmt.Errorf("closed manually by test"))
 
 	wantAttr := attributes.New(testAttrKey, testAttrVal)
 	if gotAttr := creds.attr; !cmp.Equal(gotAttr, wantAttr, cmp.AllowUnexported(attributes.Attributes{})) {
 		t.Fatalf("received attributes %v in creds, want %v", gotAttr, wantAttr)
+	}
+}
+
+func (s) TestClientDecodeHeaderStatusErr(t *testing.T) {
+	testStream := func() *Stream {
+		return &Stream{
+			done:       make(chan struct{}),
+			headerChan: make(chan struct{}),
+			buf: &recvBuffer{
+				c:  make(chan recvMsg),
+				mu: sync.Mutex{},
+			},
+		}
+	}
+
+	testClient := func(ts *Stream) *http2Client {
+		return &http2Client{
+			mu: sync.Mutex{},
+			activeStreams: map[uint32]*Stream{
+				0: ts,
+			},
+			controlBuf: &controlBuffer{
+				ch:   make(chan struct{}),
+				done: make(chan struct{}),
+				list: &itemList{},
+			},
+		}
+	}
+
+	for _, test := range []struct {
+		name string
+		// input
+		metaHeaderFrame *http2.MetaHeadersFrame
+		// output
+		wantStatus *status.Status
+	}{
+		{
+			name: "valid header",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields: []hpack.HeaderField{
+					{Name: "content-type", Value: "application/grpc"},
+					{Name: "grpc-status", Value: "0"},
+					{Name: ":status", Value: "200"},
+				},
+			},
+			// no error
+			wantStatus: status.New(codes.OK, ""),
+		},
+		{
+			name: "missing content-type header",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields: []hpack.HeaderField{
+					{Name: "grpc-status", Value: "0"},
+					{Name: ":status", Value: "200"},
+				},
+			},
+			wantStatus: status.New(
+				codes.Unknown,
+				"malformed header: missing HTTP content-type",
+			),
+		},
+		{
+			name: "invalid grpc status header field",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields: []hpack.HeaderField{
+					{Name: "content-type", Value: "application/grpc"},
+					{Name: "grpc-status", Value: "xxxx"},
+					{Name: ":status", Value: "200"},
+				},
+			},
+			wantStatus: status.New(
+				codes.Internal,
+				"transport: malformed grpc-status: strconv.ParseInt: parsing \"xxxx\": invalid syntax",
+			),
+		},
+		{
+			name: "invalid http content type",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields: []hpack.HeaderField{
+					{Name: "content-type", Value: "application/json"},
+				},
+			},
+			wantStatus: status.New(
+				codes.Internal,
+				"malformed header: missing HTTP status; transport: received unexpected content-type \"application/json\"",
+			),
+		},
+		{
+			name: "http fallback and invalid http status",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields: []hpack.HeaderField{
+					// No content type provided then fallback into handling http error.
+					{Name: ":status", Value: "xxxx"},
+				},
+			},
+			wantStatus: status.New(
+				codes.Internal,
+				"transport: malformed http-status: strconv.ParseInt: parsing \"xxxx\": invalid syntax",
+			),
+		},
+		{
+			name: "http2 frame size exceeds",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields:    nil,
+				Truncated: true,
+			},
+			wantStatus: status.New(
+				codes.Internal,
+				"peer header list size exceeded limit",
+			),
+		},
+		{
+			name: "bad status in grpc mode",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields: []hpack.HeaderField{
+					{Name: "content-type", Value: "application/grpc"},
+					{Name: "grpc-status", Value: "0"},
+					{Name: ":status", Value: "504"},
+				},
+			},
+			wantStatus: status.New(
+				codes.Unavailable,
+				"unexpected HTTP status code received from server: 504 (Gateway Timeout)",
+			),
+		},
+		{
+			name: "missing http status",
+			metaHeaderFrame: &http2.MetaHeadersFrame{
+				Fields: []hpack.HeaderField{
+					{Name: "content-type", Value: "application/grpc"},
+				},
+			},
+			wantStatus: status.New(
+				codes.Internal,
+				"malformed header: missing HTTP status",
+			),
+		},
+	} {
+
+		t.Run(test.name, func(t *testing.T) {
+			ts := testStream()
+			s := testClient(ts)
+
+			test.metaHeaderFrame.HeadersFrame = &http2.HeadersFrame{
+				FrameHeader: http2.FrameHeader{
+					StreamID: 0,
+				},
+			}
+
+			s.operateHeaders(test.metaHeaderFrame)
+
+			got := ts.status
+			want := test.wantStatus
+			if got.Code() != want.Code() || got.Message() != want.Message() {
+				t.Fatalf("operateHeaders(%v); status = \ngot: %s\nwant: %s", test.metaHeaderFrame, got, want)
+			}
+		})
+		t.Run(fmt.Sprintf("%s-end_stream", test.name), func(t *testing.T) {
+			ts := testStream()
+			s := testClient(ts)
+
+			test.metaHeaderFrame.HeadersFrame = &http2.HeadersFrame{
+				FrameHeader: http2.FrameHeader{
+					StreamID: 0,
+					Flags:    http2.FlagHeadersEndStream,
+				},
+			}
+
+			s.operateHeaders(test.metaHeaderFrame)
+
+			got := ts.status
+			want := test.wantStatus
+			if got.Code() != want.Code() || got.Message() != want.Message() {
+				t.Fatalf("operateHeaders(%v); status = \ngot: %s\nwant: %s", test.metaHeaderFrame, got, want)
+			}
+		})
 	}
 }

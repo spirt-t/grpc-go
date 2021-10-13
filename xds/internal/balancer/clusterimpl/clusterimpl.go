@@ -26,107 +26,132 @@ package clusterimpl
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"google.golang.org/grpc/balancer"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/internal"
 	"google.golang.org/grpc/internal/buffer"
 	"google.golang.org/grpc/internal/grpclog"
 	"google.golang.org/grpc/internal/grpcsync"
+	"google.golang.org/grpc/internal/pretty"
+	"google.golang.org/grpc/resolver"
 	"google.golang.org/grpc/serviceconfig"
+	xdsinternal "google.golang.org/grpc/xds/internal"
 	"google.golang.org/grpc/xds/internal/balancer/loadstore"
-	xdsclient "google.golang.org/grpc/xds/internal/client"
-	"google.golang.org/grpc/xds/internal/client/load"
+	"google.golang.org/grpc/xds/internal/xdsclient"
+	"google.golang.org/grpc/xds/internal/xdsclient/load"
 )
 
 const (
-	clusterImplName        = "xds_cluster_impl_experimental"
+	// Name is the name of the cluster_impl balancer.
+	Name                   = "xds_cluster_impl_experimental"
 	defaultRequestCountMax = 1024
 )
 
 func init() {
-	balancer.Register(clusterImplBB{})
+	balancer.Register(bb{})
 }
 
-var newXDSClient = func() (xdsClientInterface, error) { return xdsclient.New() }
+type bb struct{}
 
-type clusterImplBB struct{}
-
-func (clusterImplBB) Build(cc balancer.ClientConn, bOpts balancer.BuildOptions) balancer.Balancer {
+func (bb) Build(cc balancer.ClientConn, bOpts balancer.BuildOptions) balancer.Balancer {
 	b := &clusterImplBalancer{
 		ClientConn:      cc,
 		bOpts:           bOpts,
 		closed:          grpcsync.NewEvent(),
+		done:            grpcsync.NewEvent(),
 		loadWrapper:     loadstore.NewWrapper(),
+		scWrappers:      make(map[balancer.SubConn]*scWrapper),
 		pickerUpdateCh:  buffer.NewUnbounded(),
 		requestCountMax: defaultRequestCountMax,
 	}
 	b.logger = prefixLogger(b)
-
-	client, err := newXDSClient()
-	if err != nil {
-		b.logger.Errorf("failed to create xds-client: %v", err)
-		return nil
-	}
-	b.xdsC = client
 	go b.run()
-
 	b.logger.Infof("Created")
 	return b
 }
 
-func (clusterImplBB) Name() string {
-	return clusterImplName
+func (bb) Name() string {
+	return Name
 }
 
-func (clusterImplBB) ParseConfig(c json.RawMessage) (serviceconfig.LoadBalancingConfig, error) {
+func (bb) ParseConfig(c json.RawMessage) (serviceconfig.LoadBalancingConfig, error) {
 	return parseConfig(c)
-}
-
-// xdsClientInterface contains only the xds_client methods needed by LRS
-// balancer. It's defined so we can override xdsclient in tests.
-type xdsClientInterface interface {
-	ReportLoad(server string) (*load.Store, func())
-	Close()
 }
 
 type clusterImplBalancer struct {
 	balancer.ClientConn
-	bOpts  balancer.BuildOptions
-	closed *grpcsync.Event
-	logger *grpclog.PrefixLogger
-	xdsC   xdsClientInterface
 
-	config           *lbConfig
+	// mu guarantees mutual exclusion between Close() and handling of picker
+	// update to the parent ClientConn in run(). It's to make sure that the
+	// run() goroutine doesn't send picker update to parent after the balancer
+	// is closed.
+	//
+	// It's only used by the run() goroutine, but not the other exported
+	// functions. Because the exported functions are guaranteed to be
+	// synchronized with Close().
+	mu     sync.Mutex
+	closed *grpcsync.Event
+	done   *grpcsync.Event
+
+	bOpts     balancer.BuildOptions
+	logger    *grpclog.PrefixLogger
+	xdsClient xdsclient.XDSClient
+
+	config           *LBConfig
 	childLB          balancer.Balancer
 	cancelLoadReport func()
-	clusterName      string
 	edsServiceName   string
-	lrsServerName    string
+	lrsServerName    *string
 	loadWrapper      *loadstore.Wrapper
 
-	// childState/drops/requestCounter can only be accessed in run(). And run()
-	// is the only goroutine that sends picker to the parent ClientConn. All
+	clusterNameMu sync.Mutex
+	clusterName   string
+
+	scWrappersMu sync.Mutex
+	// The SubConns passed to the child policy are wrapped in a wrapper, to keep
+	// locality ID. But when the parent ClientConn sends updates, it's going to
+	// give the original SubConn, not the wrapper. But the child policies only
+	// know about the wrapper, so when forwarding SubConn updates, they must be
+	// sent for the wrappers.
+	//
+	// This keeps a map from original SubConn to wrapper, so that when
+	// forwarding the SubConn state update, the child policy will get the
+	// wrappers.
+	scWrappers map[balancer.SubConn]*scWrapper
+
+	// childState/drops/requestCounter keeps the state used by the most recently
+	// generated picker. All fields can only be accessed in run(). And run() is
+	// the only goroutine that sends picker to the parent ClientConn. All
 	// requests to update picker need to be sent to pickerUpdateCh.
-	childState      balancer.State
-	drops           []*dropper
-	requestCounter  *xdsclient.ServiceRequestsCounter
-	requestCountMax uint32
-	pickerUpdateCh  *buffer.Unbounded
+	childState            balancer.State
+	dropCategories        []DropConfig // The categories for drops.
+	drops                 []*dropper
+	requestCounterCluster string // The cluster name for the request counter.
+	requestCounterService string // The service name for the request counter.
+	requestCounter        *xdsclient.ClusterRequestsCounter
+	requestCountMax       uint32
+	pickerUpdateCh        *buffer.Unbounded
 }
 
 // updateLoadStore checks the config for load store, and decides whether it
 // needs to restart the load reporting stream.
-func (cib *clusterImplBalancer) updateLoadStore(newConfig *lbConfig) error {
+func (b *clusterImplBalancer) updateLoadStore(newConfig *LBConfig) error {
 	var updateLoadClusterAndService bool
 
 	// ClusterName is different, restart. ClusterName is from ClusterName and
-	// EdsServiceName.
-	if cib.clusterName != newConfig.Cluster {
+	// EDSServiceName.
+	clusterName := b.getClusterName()
+	if clusterName != newConfig.Cluster {
 		updateLoadClusterAndService = true
-		cib.clusterName = newConfig.Cluster
+		b.setClusterName(newConfig.Cluster)
+		clusterName = newConfig.Cluster
 	}
-	if cib.edsServiceName != newConfig.EDSServiceName {
+	if b.edsServiceName != newConfig.EDSServiceName {
 		updateLoadClusterAndService = true
-		cib.edsServiceName = newConfig.EDSServiceName
+		b.edsServiceName = newConfig.EDSServiceName
 	}
 	if updateLoadClusterAndService {
 		// This updates the clusterName and serviceName that will be reported
@@ -137,39 +162,66 @@ func (cib *clusterImplBalancer) updateLoadStore(newConfig *lbConfig) error {
 		// On the other hand, this will almost never happen. Each LRS policy
 		// shouldn't get updated config. The parent should do a graceful switch
 		// when the clusterName or serviceName is changed.
-		cib.loadWrapper.UpdateClusterAndService(cib.clusterName, cib.edsServiceName)
+		b.loadWrapper.UpdateClusterAndService(clusterName, b.edsServiceName)
 	}
 
+	var (
+		stopOldLoadReport  bool
+		startNewLoadReport bool
+	)
+
 	// Check if it's necessary to restart load report.
-	var newLRSServerName string
-	if newConfig.LRSLoadReportingServerName != nil {
-		newLRSServerName = *newConfig.LRSLoadReportingServerName
+	if b.lrsServerName == nil {
+		if newConfig.LoadReportingServerName != nil {
+			// Old is nil, new is not nil, start new LRS.
+			b.lrsServerName = newConfig.LoadReportingServerName
+			startNewLoadReport = true
+		}
+		// Old is nil, new is nil, do nothing.
+	} else if newConfig.LoadReportingServerName == nil {
+		// Old is not nil, new is nil, stop old, don't start new.
+		b.lrsServerName = newConfig.LoadReportingServerName
+		stopOldLoadReport = true
+	} else {
+		// Old is not nil, new is not nil, compare string values, if
+		// different, stop old and start new.
+		if *b.lrsServerName != *newConfig.LoadReportingServerName {
+			b.lrsServerName = newConfig.LoadReportingServerName
+			stopOldLoadReport = true
+			startNewLoadReport = true
+		}
 	}
-	if cib.lrsServerName != newLRSServerName {
-		// LrsLoadReportingServerName is different, load should be report to a
-		// different server, restart.
-		cib.lrsServerName = newLRSServerName
-		if cib.cancelLoadReport != nil {
-			cib.cancelLoadReport()
-			cib.cancelLoadReport = nil
+
+	if stopOldLoadReport {
+		if b.cancelLoadReport != nil {
+			b.cancelLoadReport()
+			b.cancelLoadReport = nil
+			if !startNewLoadReport {
+				// If a new LRS stream will be started later, no need to update
+				// it to nil here.
+				b.loadWrapper.UpdateLoadStore(nil)
+			}
 		}
+	}
+	if startNewLoadReport {
 		var loadStore *load.Store
-		if cib.xdsC != nil {
-			loadStore, cib.cancelLoadReport = cib.xdsC.ReportLoad(cib.lrsServerName)
+		if b.xdsClient != nil {
+			loadStore, b.cancelLoadReport = b.xdsClient.ReportLoad(*b.lrsServerName)
 		}
-		cib.loadWrapper.UpdateLoadStore(loadStore)
+		b.loadWrapper.UpdateLoadStore(loadStore)
 	}
 
 	return nil
 }
 
-func (cib *clusterImplBalancer) UpdateClientConnState(s balancer.ClientConnState) error {
-	if cib.closed.HasFired() {
-		cib.logger.Warningf("xds: received ClientConnState {%+v} after clusterImplBalancer was closed", s)
+func (b *clusterImplBalancer) UpdateClientConnState(s balancer.ClientConnState) error {
+	if b.closed.HasFired() {
+		b.logger.Warningf("xds: received ClientConnState {%+v} after clusterImplBalancer was closed", s)
 		return nil
 	}
 
-	newConfig, ok := s.BalancerConfig.(*lbConfig)
+	b.logger.Infof("Received update from resolver, balancer config: %+v", pretty.ToJSON(s.BalancerConfig))
+	newConfig, ok := s.BalancerConfig.(*LBConfig)
 	if !ok {
 		return fmt.Errorf("unexpected balancer config with type: %T", s.BalancerConfig)
 	}
@@ -182,59 +234,32 @@ func (cib *clusterImplBalancer) UpdateClientConnState(s balancer.ClientConnState
 		return fmt.Errorf("balancer %q not registered", newConfig.ChildPolicy.Name)
 	}
 
+	if b.xdsClient == nil {
+		c := xdsclient.FromResolverState(s.ResolverState)
+		if c == nil {
+			return balancer.ErrBadResolverState
+		}
+		b.xdsClient = c
+	}
+
 	// Update load reporting config. This needs to be done before updating the
 	// child policy because we need the loadStore from the updated client to be
 	// passed to the ccWrapper, so that the next picker from the child policy
 	// will pick up the new loadStore.
-	if err := cib.updateLoadStore(newConfig); err != nil {
+	if err := b.updateLoadStore(newConfig); err != nil {
 		return err
 	}
 
-	// Compare new drop config. And update picker if it's changed.
-	var updatePicker bool
-	if cib.config == nil || !equalDropCategories(cib.config.DropCategories, newConfig.DropCategories) {
-		cib.drops = make([]*dropper, 0, len(newConfig.DropCategories))
-		for _, c := range newConfig.DropCategories {
-			cib.drops = append(cib.drops, newDropper(c))
-		}
-		updatePicker = true
-	}
-
-	// Compare cluster name. And update picker if it's changed, because circuit
-	// breaking's stream counter will be different.
-	if cib.config == nil || cib.config.Cluster != newConfig.Cluster {
-		cib.requestCounter = xdsclient.GetServiceRequestsCounter(newConfig.Cluster)
-		updatePicker = true
-	}
-	// Compare upper bound of stream count. And update picker if it's changed.
-	// This is also for circuit breaking.
-	var newRequestCountMax uint32 = 1024
-	if newConfig.MaxConcurrentRequests != nil {
-		newRequestCountMax = *newConfig.MaxConcurrentRequests
-	}
-	if cib.requestCountMax != newRequestCountMax {
-		cib.requestCountMax = newRequestCountMax
-		updatePicker = true
-	}
-
-	if updatePicker {
-		cib.pickerUpdateCh.Put(&dropConfigs{
-			drops:           cib.drops,
-			requestCounter:  cib.requestCounter,
-			requestCountMax: cib.requestCountMax,
-		})
-	}
-
 	// If child policy is a different type, recreate the sub-balancer.
-	if cib.config == nil || cib.config.ChildPolicy.Name != newConfig.ChildPolicy.Name {
-		if cib.childLB != nil {
-			cib.childLB.Close()
+	if b.config == nil || b.config.ChildPolicy.Name != newConfig.ChildPolicy.Name {
+		if b.childLB != nil {
+			b.childLB.Close()
 		}
-		cib.childLB = bb.Build(cib, cib.bOpts)
+		b.childLB = bb.Build(b, b.bOpts)
 	}
-	cib.config = newConfig
+	b.config = newConfig
 
-	if cib.childLB == nil {
+	if b.childLB == nil {
 		// This is not an expected situation, and should be super rare in
 		// practice.
 		//
@@ -244,85 +269,274 @@ func (cib *clusterImplBalancer) UpdateClientConnState(s balancer.ClientConnState
 		return fmt.Errorf("child policy is nil, this means balancer %q's Build() returned nil", newConfig.ChildPolicy.Name)
 	}
 
+	// Notify run() of this new config, in case drop and request counter need
+	// update (which means a new picker needs to be generated).
+	b.pickerUpdateCh.Put(newConfig)
+
 	// Addresses and sub-balancer config are sent to sub-balancer.
-	return cib.childLB.UpdateClientConnState(balancer.ClientConnState{
+	return b.childLB.UpdateClientConnState(balancer.ClientConnState{
 		ResolverState:  s.ResolverState,
-		BalancerConfig: cib.config.ChildPolicy.Config,
+		BalancerConfig: b.config.ChildPolicy.Config,
 	})
 }
 
-func (cib *clusterImplBalancer) ResolverError(err error) {
-	if cib.closed.HasFired() {
-		cib.logger.Warningf("xds: received resolver error {%+v} after clusterImplBalancer was closed", err)
+func (b *clusterImplBalancer) ResolverError(err error) {
+	if b.closed.HasFired() {
+		b.logger.Warningf("xds: received resolver error {%+v} after clusterImplBalancer was closed", err)
 		return
 	}
 
-	if cib.childLB != nil {
-		cib.childLB.ResolverError(err)
+	if b.childLB != nil {
+		b.childLB.ResolverError(err)
 	}
 }
 
-func (cib *clusterImplBalancer) UpdateSubConnState(sc balancer.SubConn, s balancer.SubConnState) {
-	if cib.closed.HasFired() {
-		cib.logger.Warningf("xds: received subconn state change {%+v, %+v} after clusterImplBalancer was closed", sc, s)
+func (b *clusterImplBalancer) UpdateSubConnState(sc balancer.SubConn, s balancer.SubConnState) {
+	if b.closed.HasFired() {
+		b.logger.Warningf("xds: received subconn state change {%+v, %+v} after clusterImplBalancer was closed", sc, s)
 		return
 	}
 
-	if cib.childLB != nil {
-		cib.childLB.UpdateSubConnState(sc, s)
+	// Trigger re-resolution when a SubConn turns transient failure. This is
+	// necessary for the LogicalDNS in cluster_resolver policy to re-resolve.
+	//
+	// Note that this happens not only for the addresses from DNS, but also for
+	// EDS (cluster_impl doesn't know if it's DNS or EDS, only the parent
+	// knows). The parent priority policy is configured to ignore re-resolution
+	// signal from the EDS children.
+	if s.ConnectivityState == connectivity.TransientFailure {
+		b.ClientConn.ResolveNow(resolver.ResolveNowOptions{})
+	}
+
+	b.scWrappersMu.Lock()
+	if scw, ok := b.scWrappers[sc]; ok {
+		sc = scw
+		if s.ConnectivityState == connectivity.Shutdown {
+			// Remove this SubConn from the map on Shutdown.
+			delete(b.scWrappers, scw.SubConn)
+		}
+	}
+	b.scWrappersMu.Unlock()
+	if b.childLB != nil {
+		b.childLB.UpdateSubConnState(sc, s)
 	}
 }
 
-func (cib *clusterImplBalancer) Close() {
-	if cib.childLB != nil {
-		cib.childLB.Close()
-		cib.childLB = nil
+func (b *clusterImplBalancer) Close() {
+	b.mu.Lock()
+	b.closed.Fire()
+	b.mu.Unlock()
+
+	if b.childLB != nil {
+		b.childLB.Close()
+		b.childLB = nil
 	}
-	cib.xdsC.Close()
-	cib.closed.Fire()
-	cib.logger.Infof("Shutdown")
+	<-b.done.Done()
+	b.logger.Infof("Shutdown")
+}
+
+func (b *clusterImplBalancer) ExitIdle() {
+	if b.childLB == nil {
+		return
+	}
+	if ei, ok := b.childLB.(balancer.ExitIdler); ok {
+		ei.ExitIdle()
+		return
+	}
+	// Fallback for children that don't support ExitIdle -- connect to all
+	// SubConns.
+	for _, sc := range b.scWrappers {
+		sc.Connect()
+	}
 }
 
 // Override methods to accept updates from the child LB.
 
-func (cib *clusterImplBalancer) UpdateState(state balancer.State) {
+func (b *clusterImplBalancer) UpdateState(state balancer.State) {
 	// Instead of updating parent ClientConn inline, send state to run().
-	cib.pickerUpdateCh.Put(state)
+	b.pickerUpdateCh.Put(state)
+}
+
+func (b *clusterImplBalancer) setClusterName(n string) {
+	b.clusterNameMu.Lock()
+	defer b.clusterNameMu.Unlock()
+	b.clusterName = n
+}
+
+func (b *clusterImplBalancer) getClusterName() string {
+	b.clusterNameMu.Lock()
+	defer b.clusterNameMu.Unlock()
+	return b.clusterName
+}
+
+// scWrapper is a wrapper of SubConn with locality ID. The locality ID can be
+// retrieved from the addresses when creating SubConn.
+//
+// All SubConns passed to the child policies are wrapped in this, so that the
+// picker can get the localityID from the picked SubConn, and do load reporting.
+//
+// After wrapping, all SubConns to and from the parent ClientConn (e.g. for
+// SubConn state update, update/remove SubConn) must be the original SubConns.
+// All SubConns to and from the child policy (NewSubConn, forwarding SubConn
+// state update) must be the wrapper. The balancer keeps a map from the original
+// SubConn to the wrapper for this purpose.
+type scWrapper struct {
+	balancer.SubConn
+	// locality needs to be atomic because it can be updated while being read by
+	// the picker.
+	locality atomic.Value // type xdsinternal.LocalityID
+}
+
+func (scw *scWrapper) updateLocalityID(lID xdsinternal.LocalityID) {
+	scw.locality.Store(lID)
+}
+
+func (scw *scWrapper) localityID() xdsinternal.LocalityID {
+	lID, _ := scw.locality.Load().(xdsinternal.LocalityID)
+	return lID
+}
+
+func (b *clusterImplBalancer) NewSubConn(addrs []resolver.Address, opts balancer.NewSubConnOptions) (balancer.SubConn, error) {
+	clusterName := b.getClusterName()
+	newAddrs := make([]resolver.Address, len(addrs))
+	var lID xdsinternal.LocalityID
+	for i, addr := range addrs {
+		newAddrs[i] = internal.SetXDSHandshakeClusterName(addr, clusterName)
+		lID = xdsinternal.GetLocalityID(newAddrs[i])
+	}
+	sc, err := b.ClientConn.NewSubConn(newAddrs, opts)
+	if err != nil {
+		return nil, err
+	}
+	// Wrap this SubConn in a wrapper, and add it to the map.
+	b.scWrappersMu.Lock()
+	ret := &scWrapper{SubConn: sc}
+	ret.updateLocalityID(lID)
+	b.scWrappers[sc] = ret
+	b.scWrappersMu.Unlock()
+	return ret, nil
+}
+
+func (b *clusterImplBalancer) RemoveSubConn(sc balancer.SubConn) {
+	scw, ok := sc.(*scWrapper)
+	if !ok {
+		b.ClientConn.RemoveSubConn(sc)
+		return
+	}
+	// Remove the original SubConn from the parent ClientConn.
+	//
+	// Note that we don't remove this SubConn from the scWrappers map. We will
+	// need it to forward the final SubConn state Shutdown to the child policy.
+	//
+	// This entry is kept in the map until it's state is changes to Shutdown,
+	// and will be deleted in UpdateSubConnState().
+	b.ClientConn.RemoveSubConn(scw.SubConn)
+}
+
+func (b *clusterImplBalancer) UpdateAddresses(sc balancer.SubConn, addrs []resolver.Address) {
+	clusterName := b.getClusterName()
+	newAddrs := make([]resolver.Address, len(addrs))
+	var lID xdsinternal.LocalityID
+	for i, addr := range addrs {
+		newAddrs[i] = internal.SetXDSHandshakeClusterName(addr, clusterName)
+		lID = xdsinternal.GetLocalityID(newAddrs[i])
+	}
+	if scw, ok := sc.(*scWrapper); ok {
+		scw.updateLocalityID(lID)
+		// Need to get the original SubConn from the wrapper before calling
+		// parent ClientConn.
+		sc = scw.SubConn
+	}
+	b.ClientConn.UpdateAddresses(sc, newAddrs)
 }
 
 type dropConfigs struct {
 	drops           []*dropper
-	requestCounter  *xdsclient.ServiceRequestsCounter
+	requestCounter  *xdsclient.ClusterRequestsCounter
 	requestCountMax uint32
 }
 
-func (cib *clusterImplBalancer) run() {
+// handleDropAndRequestCount compares drop and request counter in newConfig with
+// the one currently used by picker. It returns a new dropConfigs if a new
+// picker needs to be generated, otherwise it returns nil.
+func (b *clusterImplBalancer) handleDropAndRequestCount(newConfig *LBConfig) *dropConfigs {
+	// Compare new drop config. And update picker if it's changed.
+	var updatePicker bool
+	if !equalDropCategories(b.dropCategories, newConfig.DropCategories) {
+		b.dropCategories = newConfig.DropCategories
+		b.drops = make([]*dropper, 0, len(newConfig.DropCategories))
+		for _, c := range newConfig.DropCategories {
+			b.drops = append(b.drops, newDropper(c))
+		}
+		updatePicker = true
+	}
+
+	// Compare cluster name. And update picker if it's changed, because circuit
+	// breaking's stream counter will be different.
+	if b.requestCounterCluster != newConfig.Cluster || b.requestCounterService != newConfig.EDSServiceName {
+		b.requestCounterCluster = newConfig.Cluster
+		b.requestCounterService = newConfig.EDSServiceName
+		b.requestCounter = xdsclient.GetClusterRequestsCounter(newConfig.Cluster, newConfig.EDSServiceName)
+		updatePicker = true
+	}
+	// Compare upper bound of stream count. And update picker if it's changed.
+	// This is also for circuit breaking.
+	var newRequestCountMax uint32 = 1024
+	if newConfig.MaxConcurrentRequests != nil {
+		newRequestCountMax = *newConfig.MaxConcurrentRequests
+	}
+	if b.requestCountMax != newRequestCountMax {
+		b.requestCountMax = newRequestCountMax
+		updatePicker = true
+	}
+
+	if !updatePicker {
+		return nil
+	}
+	return &dropConfigs{
+		drops:           b.drops,
+		requestCounter:  b.requestCounter,
+		requestCountMax: b.requestCountMax,
+	}
+}
+
+func (b *clusterImplBalancer) run() {
+	defer b.done.Fire()
 	for {
 		select {
-		case update := <-cib.pickerUpdateCh.Get():
-			cib.pickerUpdateCh.Load()
+		case update := <-b.pickerUpdateCh.Get():
+			b.pickerUpdateCh.Load()
+			b.mu.Lock()
+			if b.closed.HasFired() {
+				b.mu.Unlock()
+				return
+			}
 			switch u := update.(type) {
 			case balancer.State:
-				cib.childState = u
-				cib.ClientConn.UpdateState(balancer.State{
-					ConnectivityState: cib.childState.ConnectivityState,
-					Picker: newDropPicker(cib.childState, &dropConfigs{
-						drops:           cib.drops,
-						requestCounter:  cib.requestCounter,
-						requestCountMax: cib.requestCountMax,
-					}, cib.loadWrapper),
+				b.childState = u
+				b.ClientConn.UpdateState(balancer.State{
+					ConnectivityState: b.childState.ConnectivityState,
+					Picker: newPicker(b.childState, &dropConfigs{
+						drops:           b.drops,
+						requestCounter:  b.requestCounter,
+						requestCountMax: b.requestCountMax,
+					}, b.loadWrapper),
 				})
-			case *dropConfigs:
-				cib.drops = u.drops
-				cib.requestCounter = u.requestCounter
-				if cib.childState.Picker != nil {
-					cib.ClientConn.UpdateState(balancer.State{
-						ConnectivityState: cib.childState.ConnectivityState,
-						Picker:            newDropPicker(cib.childState, u, cib.loadWrapper),
+			case *LBConfig:
+				dc := b.handleDropAndRequestCount(u)
+				if dc != nil && b.childState.Picker != nil {
+					b.ClientConn.UpdateState(balancer.State{
+						ConnectivityState: b.childState.ConnectivityState,
+						Picker:            newPicker(b.childState, dc, b.loadWrapper),
 					})
 				}
 			}
-		case <-cib.closed.Done():
+			b.mu.Unlock()
+		case <-b.closed.Done():
+			if b.cancelLoadReport != nil {
+				b.cancelLoadReport()
+				b.cancelLoadReport = nil
+			}
 			return
 		}
 	}

@@ -19,16 +19,19 @@
 package clusterimpl
 
 import (
+	orcapb "github.com/cncf/udpa/go/udpa/data/orca/v1"
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/internal/wrr"
 	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/xds/internal/client"
-	"google.golang.org/grpc/xds/internal/client/load"
+	"google.golang.org/grpc/xds/internal/xdsclient"
+	"google.golang.org/grpc/xds/internal/xdsclient/load"
 )
 
-var newRandomWRR = wrr.NewRandom
+// NewRandomWRR is used when calculating drops. It's exported so that tests can
+// override it.
+var NewRandomWRR = wrr.NewRandom
 
 const million = 1000000
 
@@ -47,8 +50,8 @@ func gcd(a, b uint32) uint32 {
 	return a
 }
 
-func newDropper(c dropCategory) *dropper {
-	w := newRandomWRR()
+func newDropper(c DropConfig) *dropper {
+	w := NewRandomWRR()
 	gcdv := gcd(c.RequestsPerMillion, million)
 	// Return true for RequestPerMillion, false for the rest.
 	w.Add(true, int64(c.RequestsPerMillion/gcdv))
@@ -64,21 +67,30 @@ func (d *dropper) drop() (ret bool) {
 	return d.w.Next().(bool)
 }
 
+const (
+	serverLoadCPUName    = "cpu_utilization"
+	serverLoadMemoryName = "mem_utilization"
+)
+
 // loadReporter wraps the methods from the loadStore that are used here.
 type loadReporter interface {
+	CallStarted(locality string)
+	CallFinished(locality string, err error)
+	CallServerLoad(locality, name string, val float64)
 	CallDropped(locality string)
 }
 
-type dropPicker struct {
+// Picker implements RPC drop, circuit breaking drop and load reporting.
+type picker struct {
 	drops     []*dropper
 	s         balancer.State
 	loadStore loadReporter
-	counter   *client.ServiceRequestsCounter
+	counter   *xdsclient.ClusterRequestsCounter
 	countMax  uint32
 }
 
-func newDropPicker(s balancer.State, config *dropConfigs, loadStore load.PerClusterReporter) *dropPicker {
-	return &dropPicker{
+func newPicker(s balancer.State, config *dropConfigs, loadStore load.PerClusterReporter) *picker {
+	return &picker{
 		drops:     config.drops,
 		s:         s,
 		loadStore: loadStore,
@@ -87,13 +99,14 @@ func newDropPicker(s balancer.State, config *dropConfigs, loadStore load.PerClus
 	}
 }
 
-func (d *dropPicker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
+func (d *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	// Don't drop unless the inner picker is READY. Similar to
 	// https://github.com/grpc/grpc-go/issues/2622.
 	if d.s.ConnectivityState != connectivity.Ready {
 		return d.s.Picker.Pick(info)
 	}
 
+	// Check if this RPC should be dropped by category.
 	for _, dp := range d.drops {
 		if dp.drop() {
 			if d.loadStore != nil {
@@ -103,6 +116,7 @@ func (d *dropPicker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 		}
 	}
 
+	// Check if this RPC should be dropped by circuit breaking.
 	if d.counter != nil {
 		if err := d.counter.StartRequest(d.countMax); err != nil {
 			// Drops by circuit breaking are reported with empty category. They
@@ -112,11 +126,58 @@ func (d *dropPicker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 			}
 			return balancer.PickResult{}, status.Errorf(codes.Unavailable, err.Error())
 		}
-		pr, err := d.s.Picker.Pick(info)
-		if err != nil {
-			d.counter.EndRequest()
-			return pr, err
+	}
+
+	var lIDStr string
+	pr, err := d.s.Picker.Pick(info)
+	if scw, ok := pr.SubConn.(*scWrapper); ok {
+		// This OK check also covers the case err!=nil, because SubConn will be
+		// nil.
+		pr.SubConn = scw.SubConn
+		var e error
+		// If locality ID isn't found in the wrapper, an empty locality ID will
+		// be used.
+		lIDStr, e = scw.localityID().ToString()
+		if e != nil {
+			logger.Infof("failed to marshal LocalityID: %#v, loads won't be reported", scw.localityID())
 		}
+	}
+
+	if err != nil {
+		if d.counter != nil {
+			// Release one request count if this pick fails.
+			d.counter.EndRequest()
+		}
+		return pr, err
+	}
+
+	if d.loadStore != nil {
+		d.loadStore.CallStarted(lIDStr)
+		oldDone := pr.Done
+		pr.Done = func(info balancer.DoneInfo) {
+			if oldDone != nil {
+				oldDone(info)
+			}
+			d.loadStore.CallFinished(lIDStr, info.Err)
+
+			load, ok := info.ServerLoad.(*orcapb.OrcaLoadReport)
+			if !ok {
+				return
+			}
+			d.loadStore.CallServerLoad(lIDStr, serverLoadCPUName, load.CpuUtilization)
+			d.loadStore.CallServerLoad(lIDStr, serverLoadMemoryName, load.MemUtilization)
+			for n, c := range load.RequestCost {
+				d.loadStore.CallServerLoad(lIDStr, n, c)
+			}
+			for n, c := range load.Utilization {
+				d.loadStore.CallServerLoad(lIDStr, n, c)
+			}
+		}
+	}
+
+	if d.counter != nil {
+		// Update Done() so that when the RPC finishes, the request count will
+		// be released.
 		oldDone := pr.Done
 		pr.Done = func(doneInfo balancer.DoneInfo) {
 			d.counter.EndRequest()
@@ -124,8 +185,7 @@ func (d *dropPicker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 				oldDone(doneInfo)
 			}
 		}
-		return pr, err
 	}
 
-	return d.s.Picker.Pick(info)
+	return pr, err
 }

@@ -18,11 +18,6 @@
 
 // Package xds provides a transport credentials implementation where the
 // security configuration is pushed by a management server using xDS APIs.
-//
-// Experimental
-//
-// Notice: All APIs in this package are EXPERIMENTAL and may be removed in a
-// later release.
 package xds
 
 import (
@@ -216,12 +211,15 @@ func (c *credsImpl) ServerHandshake(rawConn net.Conn) (net.Conn, credentials.Aut
 	// `HandshakeInfo` does not contain the information we are looking for, we
 	// delegate the handshake to the fallback credentials.
 	hiConn, ok := rawConn.(interface {
-		XDSHandshakeInfo() *xdsinternal.HandshakeInfo
+		XDSHandshakeInfo() (*xdsinternal.HandshakeInfo, error)
 	})
 	if !ok {
 		return c.fallback.ServerHandshake(rawConn)
 	}
-	hi := hiConn.XDSHandshakeInfo()
+	hi, err := hiConn.XDSHandshakeInfo()
+	if err != nil {
+		return nil, nil, err
+	}
 	if hi.UseFallbackCreds() {
 		return c.fallback.ServerHandshake(rawConn)
 	}

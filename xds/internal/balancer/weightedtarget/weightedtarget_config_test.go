@@ -24,7 +24,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/balancer"
 	internalserviceconfig "google.golang.org/grpc/internal/serviceconfig"
-	_ "google.golang.org/grpc/xds/internal/balancer/cdsbalancer"
+	"google.golang.org/grpc/xds/internal/balancer/priority"
 )
 
 const (
@@ -32,31 +32,29 @@ const (
   "targets": {
 	"cluster_1" : {
 	  "weight":75,
-	  "childPolicy":[{"cds_experimental":{"cluster":"cluster_1"}}]
+	  "childPolicy":[{"priority_experimental":{"priorities": ["child-1"], "children": {"child-1": {"config": [{"round_robin":{}}]}}}}]
 	},
 	"cluster_2" : {
 	  "weight":25,
-	  "childPolicy":[{"cds_experimental":{"cluster":"cluster_2"}}]
+	  "childPolicy":[{"priority_experimental":{"priorities": ["child-2"], "children": {"child-2": {"config": [{"round_robin":{}}]}}}}]
 	}
   }
 }`
-
-	cdsName = "cds_experimental"
 )
 
 var (
-	cdsConfigParser = balancer.Get(cdsName).(balancer.ConfigParser)
-	cdsConfigJSON1  = `{"cluster":"cluster_1"}`
-	cdsConfig1, _   = cdsConfigParser.ParseConfig([]byte(cdsConfigJSON1))
-	cdsConfigJSON2  = `{"cluster":"cluster_2"}`
-	cdsConfig2, _   = cdsConfigParser.ParseConfig([]byte(cdsConfigJSON2))
+	testConfigParser = balancer.Get(priority.Name).(balancer.ConfigParser)
+	testConfigJSON1  = `{"priorities": ["child-1"], "children": {"child-1": {"config": [{"round_robin":{}}]}}}`
+	testConfig1, _   = testConfigParser.ParseConfig([]byte(testConfigJSON1))
+	testConfigJSON2  = `{"priorities": ["child-2"], "children": {"child-2": {"config": [{"round_robin":{}}]}}}`
+	testConfig2, _   = testConfigParser.ParseConfig([]byte(testConfigJSON2))
 )
 
 func Test_parseConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		js      string
-		want    *lbConfig
+		want    *LBConfig
 		wantErr bool
 	}{
 		{
@@ -68,20 +66,20 @@ func Test_parseConfig(t *testing.T) {
 		{
 			name: "OK",
 			js:   testJSONConfig,
-			want: &lbConfig{
-				Targets: map[string]target{
+			want: &LBConfig{
+				Targets: map[string]Target{
 					"cluster_1": {
 						Weight: 75,
 						ChildPolicy: &internalserviceconfig.BalancerConfig{
-							Name:   cdsName,
-							Config: cdsConfig1,
+							Name:   priority.Name,
+							Config: testConfig1,
 						},
 					},
 					"cluster_2": {
 						Weight: 25,
 						ChildPolicy: &internalserviceconfig.BalancerConfig{
-							Name:   cdsName,
-							Config: cdsConfig2,
+							Name:   priority.Name,
+							Config: testConfig2,
 						},
 					},
 				},
